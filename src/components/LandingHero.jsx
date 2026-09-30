@@ -9,10 +9,11 @@ import {
   CheckCircle2, 
   ShieldAlert, 
   MessageSquare,
-  Sparkles
+  Sparkles,
+  Search
 } from 'lucide-react';
 
-export default function LandingHero({ onGetStarted }) {
+export default function LandingHero({ onGetStarted, onTrack }) {
   const steps = [
     {
       num: "01",
@@ -86,7 +87,7 @@ export default function LandingHero({ onGetStarted }) {
             and ensures resolution is verified directly by citizens.
           </p>
 
-          {/* Primary Action Button */}
+          {/* Action Buttons */}
           <div className="pt-4 flex flex-col sm:flex-row items-center justify-center gap-4">
             <button
               onClick={onGetStarted}
@@ -95,6 +96,16 @@ export default function LandingHero({ onGetStarted }) {
               <span>Report a Problem</span>
               <ArrowRight className="w-5 h-5" />
             </button>
+
+            {onTrack && (
+              <button
+                onClick={onTrack}
+                className="w-full sm:w-auto inline-flex items-center justify-center gap-2.5 px-7 py-4 rounded-xl font-semibold text-base bg-white/10 hover:bg-white/20 text-white border border-white/20 hover:border-white/30 backdrop-blur-sm transition-all duration-200"
+              >
+                <Search className="w-4 h-4 text-civic-300" />
+                <span>Track Complaint</span>
+              </button>
+            )}
           </div>
 
           {/* Quick Metrics / Reassurance */}

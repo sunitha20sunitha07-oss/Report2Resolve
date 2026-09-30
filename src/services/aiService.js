@@ -1,10 +1,14 @@
-import { GoogleGenerativeAI } from '@google/generative-ai';
-
-const STORAGE_KEY = 'report2resolve_gemini_api_key';
-
 /**
- * Supported civic categories
+ * Report2Resolve - AI Grievance Classification Service
+ * 
+ * Accurately analyzes citizen complaints in Tamil, English, and Tanglish
+ * using Google Gemini AI, extracting problem summary, category,
+ * priority, and designated municipal department.
+ * 
+ * Communicates with the server-side /api/analyze proxy route as required
+ * by AI Studio architecture guidelines.
  */
+
 export const CIVIC_CATEGORIES = [
   'Roads / Potholes',
   'Street Lighting / Electrical',
@@ -17,20 +21,34 @@ export const CIVIC_CATEGORIES = [
   'Other'
 ];
 
+export const STORAGE_KEY_GEMINI = 'gemini_api_key';
+
 /**
- * Retrieve the active Gemini API key from environment or local storage.
- * @returns {string} The active key or empty string.
+ * Retrieve the active Gemini API key from localStorage or Vite environment.
+ * @returns {string}
  */
 export function getActiveApiKey() {
-  const envKey = import.meta.env.VITE_GEMINI_API_KEY;
-  if (envKey && envKey.trim() && envKey !== 'your_gemini_api_key_here') {
-    return envKey.trim();
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      const stored = window.localStorage.getItem(STORAGE_KEY_GEMINI);
+      if (stored && stored.trim()) {
+        return stored.trim();
+      }
+    }
+  } catch (e) {
+    console.warn('[AI Service] Could not read API key from localStorage:', e);
   }
-  return (localStorage.getItem(STORAGE_KEY) || '').trim();
+
+  // Vite environment variable support
+  if (typeof import.meta !== 'undefined' && import.meta.env?.VITE_GEMINI_API_KEY) {
+    return import.meta.env.VITE_GEMINI_API_KEY.trim();
+  }
+
+  return '';
 }
 
 /**
- * Check if a Gemini API key is configured.
+ * Check if a Gemini API key is configured in browser or environment.
  * @returns {boolean}
  */
 export function isApiKeyConfigured() {
@@ -38,259 +56,123 @@ export function isApiKeyConfigured() {
 }
 
 /**
- * Save user API key to localStorage (for easy testing without editing files).
- * @param {string} key 
+ * Persist Gemini API key to browser localStorage.
+ * @param {string} apiKey 
  */
-export function saveApiKeyToStorage(key) {
-  if (key && key.trim()) {
-    localStorage.setItem(STORAGE_KEY, key.trim());
-  } else {
-    localStorage.removeItem(STORAGE_KEY);
+export function saveApiKeyToStorage(apiKey) {
+  if (!apiKey || typeof apiKey !== 'string' || !apiKey.trim()) {
+    throw new Error('Please enter a valid Gemini API key.');
+  }
+
+  const clean = apiKey.trim();
+  if (typeof window !== 'undefined' && window.localStorage) {
+    window.localStorage.setItem(STORAGE_KEY_GEMINI, clean);
+    window.dispatchEvent(new Event('gemini_key_updated'));
   }
 }
 
 /**
- * Remove stored API key from localStorage.
+ * Remove stored Gemini API key from browser localStorage.
  */
 export function clearStoredApiKey() {
-  localStorage.removeItem(STORAGE_KEY);
+  if (typeof window !== 'undefined' && window.localStorage) {
+    window.localStorage.removeItem(STORAGE_KEY_GEMINI);
+    window.dispatchEvent(new Event('gemini_key_updated'));
+  }
 }
 
 /**
- * Classify error to distinguish 503, 429, 401/403, and 400.
- * 
- * - 503 -> Temporary service overload -> retry
- * - 429 -> Rate limit -> retry with backoff
- * - 401/403 -> Authentication/API key error -> do not retry
- * - 400 -> Bad request / configuration error -> do not retry
+ * Test/verify if a given Gemini API key is working.
+ * @param {string} apiKey 
+ * @returns {Promise<{valid: boolean, error?: string}>}
  */
-function classifyGeminiError(error) {
-  const status = error?.status;
-  const msg = String(error?.message || '').toLowerCase();
-
-  // 401 / 403: API key / authentication problem -> DO NOT RETRY
-  if (
-    status === 401 ||
-    status === 403 ||
-    msg.includes('401') ||
-    msg.includes('403') ||
-    msg.includes('api_key_invalid') ||
-    msg.includes('api key not valid') ||
-    msg.includes('unauthenticated') ||
-    msg.includes('permission_denied')
-  ) {
-    return {
-      type: 'AUTH_ERROR',
-      canRetry: false,
-      userMessage: 'Invalid Gemini API Key. Please verify your API key in the configuration settings.'
-    };
+export async function verifyApiKey(apiKey) {
+  const keyToTest = (apiKey || getActiveApiKey()).trim();
+  if (!keyToTest) {
+    return { valid: false, error: 'No API key provided.' };
   }
 
-  // 400: Request / configuration problem -> DO NOT RETRY
-  if (
-    status === 400 ||
-    msg.includes('400') ||
-    msg.includes('invalid_argument') ||
-    msg.includes('bad request')
-  ) {
-    return {
-      type: 'BAD_REQUEST',
-      canRetry: false,
-      userMessage: 'Request configuration error with Gemini API. Please check complaint input.'
-    };
-  }
+  try {
+    const res = await fetch('/api/verify-key', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-gemini-api-key': keyToTest
+      },
+      body: JSON.stringify({ apiKey: keyToTest })
+    });
 
-  // 503: Temporary service overload / high demand -> RETRY
-  if (
-    status === 503 ||
-    msg.includes('503') ||
-    msg.includes('high demand') ||
-    msg.includes('service unavailable') ||
-    msg.includes('temporarily unavailable') ||
-    msg.includes('model is overloaded')
-  ) {
-    return {
-      type: 'SERVICE_OVERLOAD',
-      canRetry: true,
-      userMessage: 'Gemini is temporarily busy. Retrying...'
-    };
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.valid) {
+      return { valid: true };
+    }
+    return { valid: false, error: data.error || 'Invalid API key.' };
+  } catch (err) {
+    return { valid: false, error: err?.message || 'Verification request failed.' };
   }
-
-  // 429: Rate limit -> RETRY WITH BACKOFF
-  if (
-    status === 429 ||
-    msg.includes('429') ||
-    msg.includes('resource_exhausted') ||
-    msg.includes('rate limit')
-  ) {
-    return {
-      type: 'RATE_LIMIT',
-      canRetry: true,
-      userMessage: 'Gemini rate limit reached. Retrying...'
-    };
-  }
-
-  // Network connection failures -> RETRY
-  if (msg.includes('failed to fetch') || error?.name === 'TypeError') {
-    return {
-      type: 'NETWORK_ERROR',
-      canRetry: true,
-      userMessage: 'Network error connecting to Gemini API. Retrying...'
-    };
-  }
-
-  return {
-    type: 'UNKNOWN',
-    canRetry: false,
-    userMessage: error?.message || 'Failed to analyze complaint with Gemini AI.'
-  };
 }
 
 /**
- * Construct system instructions and prompt for Gemini model.
- */
-const SYSTEM_PROMPT = `
-You are the AI engine for "Report2Resolve", a civic public-service grievance classification system.
-
-Analyze the given citizen complaint and extract structured information.
-
-Guidelines:
-1. Understand complaints written in Tamil (தமிழ்), English, Tanglish (Tamil written in English script), or other Indian regional languages.
-2. Summarize the actual civic/public-service problem concisely in English.
-3. Classify into exactly ONE of the following supported categories:
-   - Roads / Potholes
-   - Street Lighting / Electrical
-   - Water Supply
-   - Sanitation / Waste
-   - Drainage
-   - Public Transport
-   - Public Safety
-   - Government Services
-   - Other
-4. Determine priority as "Critical", "High", "Medium", or "Low" based ONLY on the complaint:
-   - "Critical": Immediate danger to life, live electrical wires, major public safety hazard, flooding inside homes.
-   - "High": Serious issue requiring quick municipal attention (e.g. major pothole on highway, open manhole, water supply contaminated).
-   - "Medium": Normal civic grievance (e.g. street light not functioning for days, garbage accumulation on street corner).
-   - "Low": Minor, aesthetic, or non-urgent civic issue.
-5. Suggest the most appropriate government/public-service department (e.g. "Municipal Electrical Department", "Public Works Department (PWD)", "Water Supply and Drainage Board (TWAD / Metro Water)", "Corporation Health & Sanitation Department", "Traffic Police Department", "State Transport Corporation").
-6. Never invent personal names, phone numbers, or private details.
-7. If the complaint text is unclear, nonsensical, or cannot be determined, set the fields to reasonable "Unknown" values instead of fabricating details.
-8. Output MUST be valid JSON adhering strictly to this schema:
-{
-  "problem": "Brief English description of the problem",
-  "category": "One of the supported categories",
-  "priority": "Critical | High | Medium | Low",
-  "department": "Name of appropriate municipal/public-service department"
-}
-`;
-
-/**
- * Analyze a citizen complaint using real Google Gemini API with exponential backoff retry.
+ * Analyze a citizen complaint with Google Gemini AI.
  * 
- * Retry Policy:
- * - Up to 3 retries (total 4 attempts) on HTTP 503 (high demand) or HTTP 429 (rate limit)
- * - Exponential backoff: 2s (attempt 1), 4s (attempt 2), 8s (attempt 3)
- * - Instant fail on 401, 403, 400
- * 
- * @param {string} complaintText 
- * @param {string} [customApiKey] - Optional override key
- * @param {Function} [onStatusUpdate] - Status callback for UI loading feedback
+ * @param {string} complaintText - Raw complaint text in Tamil, English, or Tanglish
+ * @param {string} [customApiKey] - Optional API key override
+ * @param {Function} [onStatusUpdate] - Status callback for UI feedback
  * @returns {Promise<{problem: string, category: string, priority: string, department: string}>}
  */
 export async function analyzeComplaintWithGemini(complaintText, customApiKey = '', onStatusUpdate = null) {
-  const apiKey = (customApiKey || getActiveApiKey()).trim();
-
-  if (!apiKey) {
-    throw new Error(
-      'Gemini API key is not configured. Please click "Configure API Key" in the top bar or set VITE_GEMINI_API_KEY in your .env file.'
-    );
-  }
-
   if (!complaintText || !complaintText.trim()) {
     throw new Error('Please enter a complaint description.');
   }
 
-  const genAI = new GoogleGenerativeAI(apiKey);
+  const activeKey = (customApiKey || getActiveApiKey()).trim();
 
-  // We use gemini-3.8-flash for fast, accurate multilingual analysis
-  const model = genAI.getGenerativeModel({
-    model: 'gemini-3.8-flash',
-    generationConfig: {
-      responseMimeType: 'application/json',
-      temperature: 0.1,
+  if (onStatusUpdate) onStatusUpdate('Analyzing grievance with Google Gemini AI...');
+
+  try {
+    const headers = {
+      'Content-Type': 'application/json',
+    };
+    if (activeKey) {
+      headers['x-gemini-api-key'] = activeKey;
     }
-  });
 
-  const prompt = `${SYSTEM_PROMPT}\n\nCitizen Complaint:\n"${complaintText.trim()}"\n\nReturn JSON:`;
+    const response = await fetch('/api/analyze', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ 
+        complaintText: complaintText.trim(),
+        apiKey: activeKey 
+      })
+    });
 
-  const BACKOFF_DELAYS = [2000, 4000, 8000]; // 2s, 4s, 8s
-  const MAX_RETRIES = 3;
-  let lastError = null;
+    const data = await response.json().catch(() => ({}));
 
-  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-    try {
-      if (attempt > 0) {
-        if (onStatusUpdate) {
-          onStatusUpdate('Gemini is temporarily busy. Retrying...');
-        }
-      } else {
-        if (onStatusUpdate) {
-          onStatusUpdate('Analyzing complaint...');
-        }
+    if (!response.ok) {
+      const errorMsg = data.error || `Server returned error (${response.status})`;
+      const err = new Error(errorMsg);
+      if (data.needsApiKey || response.status === 401) {
+        err.needsApiKey = true;
       }
-
-      const result = await model.generateContent(prompt);
-      const response = await result.response;
-      let text = response.text();
-
-      if (!text) {
-        throw new Error('Empty response received from Gemini AI.');
-      }
-
-      // Clean any markdown code blocks if present
-      text = text.replace(/```json/gi, '').replace(/```/g, '').trim();
-
-      const parsed = JSON.parse(text);
-
-      // Validate and sanitize required fields
-      const validPriorities = ['Critical', 'High', 'Medium', 'Low'];
-      const matchedPriority = validPriorities.find(
-        p => p.toLowerCase() === String(parsed.priority || '').toLowerCase()
-      ) || 'Medium';
-
-      return {
-        problem: parsed.problem || 'Unknown Civic Issue',
-        category: parsed.category || 'Other',
-        priority: matchedPriority,
-        department: parsed.department || 'Local Civic Administration'
-      };
-    } catch (error) {
-      lastError = error;
-      console.warn(`[Gemini API Attempt ${attempt + 1}/${MAX_RETRIES + 1} Failed]:`, error?.message || error);
-
-      const classification = classifyGeminiError(error);
-
-      // If non-retryable (e.g. 401/403 Auth error, 400 Bad request), fail immediately
-      if (!classification.canRetry) {
-        throw new Error(classification.userMessage);
-      }
-
-      // If we still have retries remaining, wait with exponential backoff
-      if (attempt < MAX_RETRIES) {
-        const waitMs = BACKOFF_DELAYS[attempt];
-        if (onStatusUpdate) {
-          onStatusUpdate('Gemini is temporarily busy. Retrying...');
-        }
-        await new Promise(resolve => setTimeout(resolve, waitMs));
-      }
+      throw err;
     }
-  }
 
-  // If all 3 retries (4 total attempts) fail:
-  const finalClass = classifyGeminiError(lastError);
-  if (finalClass.type === 'SERVICE_OVERLOAD' || finalClass.type === 'RATE_LIMIT' || finalClass.type === 'NETWORK_ERROR') {
-    throw new Error('Gemini is temporarily unavailable. Please try again in a moment.');
-  }
+    if (!data.problem && !data.category) {
+      throw new Error('Invalid response structure received from analysis service.');
+    }
 
-  throw new Error(finalClass.userMessage || 'Gemini is temporarily unavailable. Please try again in a moment.');
+    return {
+      problem: data.problem || 'Civic Issue Summary',
+      category: data.category || 'Other',
+      priority: data.priority || 'Medium',
+      department: data.department || 'Local Civic Administration',
+      isEmergency: Boolean(data.isEmergency),
+      emergencyType: data.emergencyType || (data.isEmergency ? 'Civic Emergency Hazard' : 'None'),
+      emergencyReason: data.emergencyReason || ''
+    };
+
+  } catch (error) {
+    console.error('[AI Service Error]:', error);
+    throw error;
+  }
 }
