@@ -1,6 +1,6 @@
 /**
  * Netlify Function: verify-key.mjs
- * Handles: POST /api/verify-key
+ * Route: /.netlify/functions/verify-key (and rewritten from /api/verify-key)
  */
 
 import { GoogleGenAI } from '@google/genai';
@@ -20,9 +20,13 @@ function createJsonResponse(data, status = 200, isWebStandard = true) {
   return { statusCode: status, headers, body: JSON.stringify(data) };
 }
 
-export default async function handler(reqOrEvent) {
+export async function handler(reqOrEvent) {
   const isWebStandard = Boolean(
-    reqOrEvent && (typeof reqOrEvent.json === 'function' || typeof reqOrEvent.text === 'function')
+    reqOrEvent && (
+      typeof reqOrEvent.json === 'function' ||
+      typeof reqOrEvent.text === 'function' ||
+      (typeof Request !== 'undefined' && reqOrEvent instanceof Request)
+    )
   );
 
   const method = isWebStandard ? reqOrEvent.method : (reqOrEvent?.httpMethod || 'POST');
@@ -70,7 +74,7 @@ export default async function handler(reqOrEvent) {
 
   try {
     const client = new GoogleGenAI(clientOptions);
-    const res = await client.models.generateContent({
+    await client.models.generateContent({
       model: 'gemini-3.8-flash',
       contents: 'ping',
     });
@@ -80,6 +84,4 @@ export default async function handler(reqOrEvent) {
   }
 }
 
-export const config = {
-  path: "/api/verify-key"
-};
+export default handler;

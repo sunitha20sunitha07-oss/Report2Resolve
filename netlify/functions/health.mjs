@@ -1,23 +1,26 @@
 /**
  * Netlify Function: health.mjs
- * Handles: GET /api/health
+ * Route: /.netlify/functions/health (and rewritten from /api/health)
  */
 
-export default async function handler(reqOrEvent) {
+export async function handler(reqOrEvent) {
   const isWebStandard = Boolean(
-    reqOrEvent && (typeof reqOrEvent.json === 'function' || typeof reqOrEvent.text === 'function')
+    reqOrEvent && (typeof reqOrEvent.json === 'function' || typeof reqOrEvent.text === 'function' || (typeof Request !== 'undefined' && reqOrEvent instanceof Request))
   );
 
   const data = {
     status: 'ok',
     environment: 'netlify-functions',
     hasServerKey: Boolean(process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY),
-    hasAiGatewayBaseUrl: Boolean(process.env.GOOGLE_GEMINI_BASE_URL)
+    hasAiGatewayBaseUrl: Boolean(process.env.GOOGLE_GEMINI_BASE_URL),
+    timestamp: new Date().toISOString()
   };
 
   const headers = {
     'Content-Type': 'application/json',
-    'Access-Control-Allow-Origin': '*'
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Headers': 'Content-Type, x-gemini-api-key',
+    'Access-Control-Allow-Methods': 'GET, OPTIONS'
   };
 
   if (isWebStandard && typeof Response !== 'undefined') {
@@ -27,6 +30,4 @@ export default async function handler(reqOrEvent) {
   return { statusCode: 200, headers, body: JSON.stringify(data) };
 }
 
-export const config = {
-  path: "/api/health"
-};
+export default handler;

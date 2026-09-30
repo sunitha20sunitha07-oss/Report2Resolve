@@ -1,0 +1,4 @@
+/api/analyze       /.netlify/functions/analyze      200!
+/api/verify-key    /.netlify/functions/verify-key   200!
+/api/health        /.netlify/functions/health       200!
+/*                 /index.html                      200

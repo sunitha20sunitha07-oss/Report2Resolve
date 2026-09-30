@@ -1,12 +1,13 @@
 [build]
   command = "npm run build"
   publish = "dist"
+  functions = "netlify/functions"
 
 [functions]
   directory = "netlify/functions"
   node_bundler = "esbuild"
 
-# Netlify function proxy redirects
+# Forward /api/* requests directly to Netlify Functions with 200 rewrite
 [[redirects]]
   from = "/api/analyze"
   to = "/.netlify/functions/analyze"
@@ -25,7 +26,7 @@
   status = 200
   force = true
 
-# SPA fallback redirect for React Router / client routes
+# SPA client-side routing fallback
 [[redirects]]
   from = "/*"
   to = "/index.html"

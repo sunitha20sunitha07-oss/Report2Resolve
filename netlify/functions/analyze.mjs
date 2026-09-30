@@ -1,6 +1,6 @@
 /**
  * Netlify Function: analyze.mjs
- * Handles: POST /api/analyze
+ * Route: /.netlify/functions/analyze (and rewritten from /api/analyze)
  * 
  * Powered by Google Gemini AI via @google/genai SDK.
  * Automatically utilizes Netlify AI Gateway credentials:
@@ -65,7 +65,6 @@ Guidelines:
 }
 `;
 
-// Helper to build JSON response supporting both Web standard Response and AWS Lambda event style
 function createJsonResponse(data, status = 200, isWebStandard = true) {
   const headers = {
     'Content-Type': 'application/json',
@@ -88,15 +87,17 @@ function createJsonResponse(data, status = 200, isWebStandard = true) {
   };
 }
 
-export default async function handler(reqOrEvent, context) {
+export async function handler(reqOrEvent, context) {
   const isWebStandard = Boolean(
-    reqOrEvent && (typeof reqOrEvent.json === 'function' || typeof reqOrEvent.text === 'function')
+    reqOrEvent && (
+      typeof reqOrEvent.json === 'function' ||
+      typeof reqOrEvent.text === 'function' ||
+      (typeof Request !== 'undefined' && reqOrEvent instanceof Request)
+    )
   );
 
-  // Determine HTTP Method
   const method = isWebStandard ? reqOrEvent.method : (reqOrEvent?.httpMethod || 'POST');
 
-  // Handle CORS Preflight
   if (method === 'OPTIONS') {
     return createJsonResponse({ ok: true }, 200, isWebStandard);
   }
@@ -105,7 +106,6 @@ export default async function handler(reqOrEvent, context) {
     return createJsonResponse({ error: 'Method not allowed. Use POST.' }, 405, isWebStandard);
   }
 
-  // Parse Body safely
   let body = {};
   try {
     if (isWebStandard) {
@@ -132,10 +132,6 @@ export default async function handler(reqOrEvent, context) {
     return createJsonResponse({ error: 'Complaint text is required.' }, 400, isWebStandard);
   }
 
-  // Resolve API Key:
-  // 1. Netlify AI Gateway automatically populates process.env.GEMINI_API_KEY
-  // 2. Fallback to process.env.VITE_GEMINI_API_KEY
-  // 3. Fallback to header or body apiKey if provided
   let headerApiKey = null;
   if (isWebStandard && typeof reqOrEvent.headers?.get === 'function') {
     headerApiKey = reqOrEvent.headers.get('x-gemini-api-key');
@@ -158,7 +154,6 @@ export default async function handler(reqOrEvent, context) {
     }, 401, isWebStandard);
   }
 
-  // Netlify AI Gateway Base URL (automatically populated when using AI Gateway)
   const baseUrl = (process.env.GOOGLE_GEMINI_BASE_URL || '').trim();
 
   const clientOptions = {
@@ -179,7 +174,6 @@ export default async function handler(reqOrEvent, context) {
     const prompt = `${SYSTEM_PROMPT}\n\nCitizen Complaint:\n"${complaintText.trim()}"\n\nReturn JSON:`;
 
     let response;
-    // Primary model: gemini-3.8-flash (standard Gemini 3 supported by Netlify AI Gateway and Google GenAI SDK)
     try {
       response = await client.models.generateContent({
         model: 'gemini-3.8-flash',
@@ -191,9 +185,8 @@ export default async function handler(reqOrEvent, context) {
       });
     } catch (modelErr) {
       const errMsg = String(modelErr?.message || '');
-      // Fallback if specific model is not mapped in the current AI Gateway tier
       if (errMsg.toLowerCase().includes('not found') || errMsg.toLowerCase().includes('is not supported')) {
-        console.warn('[Netlify Function] gemini-3.8-flash fallback triggered:', errMsg);
+        console.warn('[Netlify Function] gemini-3.8-flash fallback to gemini-2.5-flash:', errMsg);
         response = await client.models.generateContent({
           model: 'gemini-2.5-flash',
           contents: prompt,
@@ -208,8 +201,6 @@ export default async function handler(reqOrEvent, context) {
     }
 
     let text = response?.text || '';
-
-    // Extract JSON substring if formatted inside markdown code blocks
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (jsonMatch) {
       text = jsonMatch[0];
@@ -269,6 +260,4 @@ export default async function handler(reqOrEvent, context) {
   }
 }
 
-export const config = {
-  path: "/api/analyze"
-};
+export default handler;
