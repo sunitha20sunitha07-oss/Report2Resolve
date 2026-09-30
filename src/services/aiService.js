@@ -137,7 +137,7 @@ export async function analyzeComplaintWithGemini(complaintText, customApiKey = '
       headers['x-gemini-api-key'] = activeKey;
     }
 
-    const response = await fetch('/api/analyze', {
+    let response = await fetch('/api/analyze', {
       method: 'POST',
       headers,
       body: JSON.stringify({ 
@@ -145,6 +145,25 @@ export async function analyzeComplaintWithGemini(complaintText, customApiKey = '
         apiKey: activeKey 
       })
     });
+
+    // In case the redirect from /api/analyze to /.netlify/functions/analyze is not yet active:
+    if (response.status === 404) {
+      try {
+        const netlifyFunctionRes = await fetch('/.netlify/functions/analyze', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ 
+            complaintText: complaintText.trim(),
+            apiKey: activeKey 
+          })
+        });
+        if (netlifyFunctionRes.status !== 404) {
+          response = netlifyFunctionRes;
+        }
+      } catch (fallbackErr) {
+        console.warn('Fallback to /.netlify/functions/analyze failed:', fallbackErr);
+      }
+    }
 
     const data = await response.json().catch(() => ({}));
 

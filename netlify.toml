@@ -1,0 +1,32 @@
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+[functions]
+  directory = "netlify/functions"
+  node_bundler = "esbuild"
+
+# Netlify function proxy redirects
+[[redirects]]
+  from = "/api/analyze"
+  to = "/.netlify/functions/analyze"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/api/verify-key"
+  to = "/.netlify/functions/verify-key"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/api/health"
+  to = "/.netlify/functions/health"
+  status = 200
+  force = true
+
+# SPA fallback redirect for React Router / client routes
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
